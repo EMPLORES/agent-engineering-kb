@@ -168,7 +168,7 @@ LLM基于新的上下文重新推理，生成最终回答。
 
 \[Final Answer] 天气晴朗，温度适中，适合出去活动。
 
-\[Final Answer] 天气晴朗，温度适中，适合出去活动。
+
 
 \## 6. Runtime / LLM / Tool关系
 
