@@ -133,21 +133,40 @@ Step 1: asking model
 \[Runtime] Step 2: asking model
 
 \[Runtime] Model response: {'type': 'final', 'content': '天气晴朗，温度适中，适合出去活动。'}
-该实验展示：
-
-第一次模型调用：LLM根据任务决定调用工具。
 
 
 
-第二次模型调用：Runtime将工具结果反馈给模型，模型根据新的Observation生成最终答案。
+\## 实验观察
 
 
 
-两次模型调用的输入上下文不同，
+第一次模型调用：
+
+
+
+LLM根据用户任务判断需要调用工具，并生成tool\_call。
+
+
+
+第二次模型调用：
+
+
+
+Runtime执行工具后，将Observation反馈给LLM。
+
+
+
+LLM基于新的上下文重新推理，生成最终回答。
+
+
+
+两次模型调用接收到的上下文不同，
 
 因此产生不同决策。
 
 
+
+\[Final Answer] 天气晴朗，温度适中，适合出去活动。
 
 \[Final Answer] 天气晴朗，温度适中，适合出去活动。
 
