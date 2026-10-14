@@ -166,11 +166,247 @@ Tool Calling 不等于模型直接执行代码。
 
 
 
-\## 8. 我的理解
+\## 8. LangGraph中的Tool Calling
 
 
 
-LLM 是决策能力来源，Runtime 负责调度与控制，Tool 提供实际执行能力。
+\### 8.1 Day1 Runtime Loop中的Tool Calling
+
+User Task
+
+
+
+↓
+
+
+
+Runtime
+
+
+
+↓
+
+
+
+LLM
+
+
+
+↓
+
+
+
+Tool Calling / Final
+
+
+
+↓
+
+
+
+Runtime
+
+
+
+↓
+
+
+
+Tool
+
+
+
+↓
+
+
+
+Tool Result
+
+
+
+↓
+
+
+
+Messages Update
+
+
+
+↓
+
+
+
+LLM继续判断
+
+
+
+\### 8.2 LangGraph中的Tool Calling流程
+
+State
+
+
+
+↓
+
+
+
+LLM Node
+
+
+
+↓
+
+
+
+AIMessage(tool\_call)
+
+
+
+↓
+
+
+
+ToolNode
+
+
+
+↓
+
+
+
+Tool
+
+
+
+↓
+
+
+
+ToolMessage
+
+
+
+↓
+
+
+
+State Update
+
+
+
+↓
+
+
+
+Reducer
+
+
+
+↓
+
+
+
+New State
+
+
+
+↓
+
+
+
+LLM Node
+
+\### 8.3 AIMessage与ToolMessage
+
+AIMessage表示模型产生的消息。
+
+
+
+在Tool Calling场景中，AIMessage可以包含tool\_calls，表示模型希望调用某个工具。如果模型直接回答用户，AIMessage也可以只包含普通文本回复。
+
+
+
+
+
+ToolMessage表示工具执行后的返回结果。它由Tool执行产生，用于向模型提供Observation。
+
+
+
+\### 8.4 ToolNode与Runtime的关系
+
+Runtime负责调度Graph中的Node执行。
+
+ToolNode是Graph中的一个Node。
+
+
+
+ToolNode连接LLM产生的tool\_call和真实Tool执行过程。
+
+
+
+Runtime负责运行ToolNode。
+
+\### 8.5 State Update与Reducer
+
+Node不会直接修改State。
+
+
+
+Node只返回State Update。
+
+
+
+Runtime接收到更新后，根据字段对应的Reducer规则合并State。
+
+
+
+Reducer决定：
+
+新增、覆盖或者合并。
+
+
+
+\### 8.6 Day1 Runtime Loop 与 LangGraph Tool Calling区别
+
+Day1 Runtime Loop通过代码隐藏实现Agent Loop。
+
+
+
+开发者需要自己维护：
+
+
+
+\- tool判断
+
+\- 循环控制
+
+\- messages更新
+
+\- 结束条件
+
+
+
+
+
+LangGraph将这些逻辑显式表达为：
+
+
+
+State
+
+Node
+
+Edge
+
+
+
+使复杂Agent中的状态变化和执行路径更加容易管理。
+
+
+
+\### 8.7 我的理解
+
+LLM 是决策能力来源，Runtime 负责调度与控制，Tool 提供实际执行能力。LangGraph并没有改变Tool Calling的本质，而是将原本隐藏在Runtime Loop中的工具调用流程，通过Node和State结构显式表达出来。
 
 
 
@@ -182,7 +418,9 @@ LLM 是决策能力来源，Runtime 负责调度与控制，Tool 提供实际执
 
 
 
-\## 9. 当前待研究问题
+
+
+\### 8.8 当前疑问
 
 
 
@@ -202,7 +440,9 @@ LLM 是决策能力来源，Runtime 负责调度与控制，Tool 提供实际执
 
 
 
-\## 10. 参考资料
+
+
+\## 9 . 参考资料
 
 
 
