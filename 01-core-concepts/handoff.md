@@ -25,35 +25,20 @@ Handoff 用于表达交接意图和目标 Agent。随后，框架或调度器执
 \## 3. Handoff 的最小工作流程
 
 
-
 ```text
-
 用户请求
-
-&#x20;  ↓
-
+  ↓
 当前 Agent 分析任务
-
-&#x20;  ↓
-
+  ↓
 确定交接目标和需要交接的任务
-
-&#x20;  ↓
-
+  ↓
 Handoff 表达交接意图
-
-&#x20;  ↓
-
+  ↓
 Runtime / 调度器识别请求并执行转交
-
-&#x20;  ↓
-
+  ↓
 接收方 Agent 接管并处理任务
-
-&#x20;  ↓
-
+  ↓
 接收方给出结果
-
 ```
 
 
@@ -111,13 +96,9 @@ Handoff 表达当前 Agent 将任务处理权交给目标 Agent 的意图；Runt
 
 
 ```python
-
 if isinstance(result, Handoff):
-
-&#x20;   if result.target\_agent == "refund\_agent":
-
-&#x20;       result = refund\_agent(result.task)
-
+    if result.target_agent == "refund_agent":
+        result = refund_agent(result.task)
 ```
 
 
