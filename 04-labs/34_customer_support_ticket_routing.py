@@ -1,7 +1,13 @@
+import os
+import json
 
 from typing import TypedDict
+from dotenv import load_dotenv
+from openai import OpenAI
 
 from langgraph.graph import StateGraph, START, END
+
+load_dotenv()
 
 
 # ============================================================
@@ -25,6 +31,10 @@ class TicketState(TypedDict):
     result: str
 
     matched_categories: list[str]
+
+    confidence: str
+    classification_reason: str
+    classification_error: str
 
     # Record executed nodes so we can inspect the actual route.
     processing_steps: list[str]
@@ -69,49 +79,179 @@ def invalid_ticket(state: TicketState) -> dict:
     }
 
 
+
 def classify_ticket(state: TicketState) -> dict:
-    """Classify a ticket using deterministic keyword rules."""
+    """Classify a ticket using DeepSeek structured output."""
 
-    message = state["user_message"].lower()
+    try:
+        api_key = os.getenv("LANGGRAPH_API_KEY")
+        base_url = os.getenv("LANGGRAPH_BASE_URL")
+        model = os.getenv("LANGGRAPH_MODEL")
 
-    account_keywords = [
-        "账号", "账户", "登录", "密码", "验证码"
-    ]
+        if not api_key or not base_url or not model:
+            raise ValueError("Missing API configuration")
 
-    technical_keywords = [
-        "崩溃", "故障", "无法使用", "报错",
-        "异常", "bug", "闪退"
-    ]
+        client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
 
-    order_keywords = [
-        "订单", "付款", "支付", "物流",
-        "发货", "快递", "退款"
-    ]
+        system_prompt = """
+你是一个客服工单分类助手。
 
-    matched_categories = []
-    if any(keyword in message for keyword in account_keywords):
-        matched_categories.append("Account")
+请根据用户提供的工单内容判断业务类别。
 
-    if any(keyword in message for keyword in technical_keywords):
-        matched_categories.append("Technical")
+允许的类别：
+- Account：账号、登录、密码、账户问题
+- Technical：系统故障、程序错误、功能异常
+- Order：订单、付款、支付、物流、发货、退款
+- Unknown：无法明确判断类别
+- Multiple：同时涉及多个业务类别
 
-    if any(keyword in message for keyword in order_keywords):
-        matched_categories.append("Order")
+信心等级：
+- High：描述清晰，分类依据明确
+- Medium：有一定依据，但存在不确定性
+- Low：描述模糊，无法可靠判断
 
-    if len(matched_categories) == 0:
-        category = "Unknown"
-    elif len(matched_categories) == 1:
-        category = matched_categories[0]
-    else:
-        category = "Multiple"
-    
-    return{
-        "category": category,
-        "matched_categories": matched_categories,
-        "processing_steps": state["processing_steps"] + [
-            "classify_ticket"
-        ],
-    }
+规则：
+1. matched_categories 只能包含 Account、Technical、Order。
+2. 没有匹配类别时，category 必须是 Unknown。
+3. 同时涉及多个类别时，category 必须是 Multiple。
+4. 只有一个匹配类别时，category 必须与该类别一致。
+5. 不要为了给出分类而猜测。
+6. 必须包含 category、matched_categories、
+   confidence、reason 四个字段。
+7. 只输出 JSON，不输出其他文字。
+
+示例：
+{
+    "category": "Technical",
+    "matched_categories": ["Technical"],
+    "confidence": "High",
+    "reason": "用户描述了系统故障"
+}
+"""
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": state["user_message"]
+                }
+            ],
+            response_format={
+                "type": "json_object"
+            },
+            max_tokens=300
+        )
+
+        message = response.choices[0].message
+        content = message.content
+
+        if not content or not content.strip():
+            raise ValueError("Empty model response")
+
+        if response.choices[0].finish_reason == "length":
+            raise ValueError("Model output was truncated")
+
+        classification = json.loads(content)
+
+        required_fields = {
+            "category",
+            "matched_categories",
+            "confidence",
+            "reason"
+        }
+
+        if not required_fields.issubset(classification.keys()):
+            raise ValueError("Missing required fields")
+
+        category = classification["category"]
+        matched_categories = classification["matched_categories"]
+        confidence = classification["confidence"]
+        reason = classification["reason"]
+
+        allowed_categories = {
+            "Account", "Technical", "Order",
+            "Unknown", "Multiple"
+        }
+
+        allowed_matches = {
+            "Account", "Technical", "Order"
+        }
+
+        allowed_confidence = {
+            "High", "Medium", "Low"
+        }
+
+        if category not in allowed_categories:
+            raise ValueError("Invalid category")
+
+        if not isinstance(matched_categories, list):
+            raise ValueError("Invalid matched_categories")
+
+        if not all(
+            item in allowed_matches
+            for item in matched_categories
+        ):
+            raise ValueError("Invalid matched category")
+
+        if len(matched_categories) != len(set(matched_categories)):
+            raise ValueError("Duplicate matched categories")
+
+        if confidence not in allowed_confidence:
+            raise ValueError("Invalid confidence")
+
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("Invalid reason")
+
+        # Check whether category and matched_categories agree.
+        if category == "Unknown" and matched_categories:
+            raise ValueError("Inconsistent Unknown classification")
+
+        if category == "Multiple" and len(matched_categories) < 2:
+            raise ValueError("Inconsistent Multiple classification")
+
+        if category in allowed_matches:
+            if matched_categories != [category]:
+                raise ValueError("Inconsistent single classification")
+
+        # Only High-confidence single-category results
+        # are allowed to enter automatic routing.
+        if confidence != "High":
+            category = "Unknown"
+
+
+        return {
+            "category": category,
+            "matched_categories": matched_categories,
+            "confidence": confidence,
+            "classification_reason": reason,
+            "classification_error": "",
+            "processing_steps": state["processing_steps"] + [
+                "classify_ticket"
+            ],
+        }
+
+    except Exception as error:
+        # Fail safely: do not automatically route an
+        # unverified model result.
+        return {
+            "category": "Unknown",
+            "matched_categories": [],
+            "confidence": "Low",
+            "classification_reason": "模型调用或结果校验失败，需要人工处理",
+            "classification_error": type(error).__name__,
+            "processing_steps": state["processing_steps"] + [
+                "classify_ticket"
+            ],
+        }
+
 
 
 def assess_priority(state: TicketState) -> dict:
@@ -329,6 +469,11 @@ def run_test(graph, title: str, ticket_id: str, message: str):
         "result": "",
 
         "processing_steps": [],
+
+        "matched_categories": [],
+        "confidence": "",
+        "classification_reason": "",
+        "classification_error": "",
     }
 
     result = graph.invoke(initial_state)
