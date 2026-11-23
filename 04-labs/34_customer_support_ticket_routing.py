@@ -587,6 +587,47 @@ def main():
 
     run_classification_failure_integration_tests(graph)
 
+    run_test(
+        graph,
+        "TEST 1：账号问题",
+        "T001",
+        "我登录账号时提示密码错误",
+    )
+
+    run_test(
+        graph,
+        "TEST 2：严重技术故障",
+        "T002",
+        "系统发生严重崩溃，现在完全无法使用",
+    )
+
+    run_test(
+        graph,
+        "TEST 3：订单问题",
+        "T003",
+        "我的订单已经付款，但是一直没有发货",
+    )
+
+    run_test(
+        graph,
+        "TEST 4：无效工单",
+        "T004",
+        "",
+    )
+
+    run_test(
+        graph,
+        "TEST 5：无法识别的工单类别",
+        "T005",
+        "我想咨询一下企业合作事宜",
+    )
+    run_test(
+    graph,
+    "TEST 6：多类别工单",
+    "T006",
+    "我无法登录账号，而且订单付款后一直没有发货",
+     )
+
 def make_mock_llm_response(classification: dict):
     # 辅助函数
     """Create a mock DeepSeek response."""
@@ -807,46 +848,6 @@ def run_confidence_routing_integration_tests(graph):
 
     print("所有置信度门控与路由集成测试通过！")
 
-    run_test(
-        graph,
-        "TEST 1：账号问题",
-        "T001",
-        "我登录账号时提示密码错误",
-    )
-
-    run_test(
-        graph,
-        "TEST 2：严重技术故障",
-        "T002",
-        "系统发生严重崩溃，现在完全无法使用",
-    )
-
-    run_test(
-        graph,
-        "TEST 3：订单问题",
-        "T003",
-        "我的订单已经付款，但是一直没有发货",
-    )
-
-    run_test(
-        graph,
-        "TEST 4：无效工单",
-        "T004",
-        "",
-    )
-
-    run_test(
-        graph,
-        "TEST 5：无法识别的工单类别",
-        "T005",
-        "我想咨询一下企业合作事宜",
-    )
-    run_test(
-    graph,
-    "TEST 6：多类别工单",
-    "T006",
-    "我无法登录账号，而且订单付款后一直没有发货",
-     )
 
 def run_classification_failure_integration_tests(graph):
     """Test classification failures and safe recovery."""
