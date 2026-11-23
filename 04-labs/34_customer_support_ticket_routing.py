@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import os
 import json
 
@@ -79,6 +82,86 @@ def invalid_ticket(state: TicketState) -> dict:
     }
 
 
+def apply_confidence_gate(category: str, confidence: str) -> str:
+    """Apply confidence-based routing rules."""
+
+    auto_route_categories = {
+        "Account",
+        "Technical",
+        "Order"
+    }
+
+    if category in auto_route_categories and confidence != "High":
+        return "Unknown"
+
+    return category
+
+def run_confidence_gate_tests():
+    """Test confidence gate without calling the LLM."""
+
+    test_cases = [
+        # Account
+        ("Account", "High", "Account"),
+        ("Account", "Medium", "Unknown"),
+        ("Account", "Low", "Unknown"),
+
+        # Technical
+        ("Technical", "High", "Technical"),
+        ("Technical", "Medium", "Unknown"),
+        ("Technical", "Low", "Unknown"),
+
+        # Order
+        ("Order", "High", "Order"),
+        ("Order", "Medium", "Unknown"),
+        ("Order", "Low", "Unknown"),
+
+        # Unknown
+        ("Unknown", "High", "Unknown"),
+        ("Unknown", "Medium", "Unknown"),
+        ("Unknown", "Low", "Unknown"),
+
+        # Multiple
+        ("Multiple", "High", "Multiple"),
+        ("Multiple", "Medium", "Multiple"),
+        ("Multiple", "Low", "Multiple"),
+    ]
+
+    print("\n=======================================================")
+    print("置信度门控测试")
+    print("=======================================================")
+
+    passed = 0
+    failures = []
+
+    for index, (category, confidence, expected) in enumerate(
+        test_cases, start=1
+    ):
+        actual = apply_confidence_gate(category, confidence)
+
+        if actual == expected:
+            passed += 1
+            print(
+                f"PASS {index}: "
+                f"{category} + {confidence} -> {actual}"
+            )
+        else:
+            failures.append(
+                f"TEST {index}: expected {expected}, got {actual}"
+            )
+            print(
+                f"FAIL {index}: "
+                f"{category} + {confidence} -> {actual}"
+            )
+
+    print("-------------------------------------------------------")
+    print(f"测试结果：{passed}/{len(test_cases)} 通过")
+
+    if failures:
+        for failure in failures:
+            print(failure)
+        raise AssertionError("Confidence gate tests failed")
+
+    print("所有置信度门控测试通过！")
 
 def classify_ticket(state: TicketState) -> dict:
     """Classify a ticket using DeepSeek structured output."""
@@ -223,8 +306,7 @@ def classify_ticket(state: TicketState) -> dict:
 
         # Only High-confidence single-category results
         # are allowed to enter automatic routing.
-        if confidence != "High":
-            category = "Unknown"
+        category = apply_confidence_gate(category, confidence)
 
 
         return {
@@ -331,6 +413,10 @@ def finalize_ticket(state: TicketState) -> dict:
     priority = state.get("priority", "Not Assessed")
     assigned_queue = state.get("assigned_queue", "Not Assigned")
     routing_reason = state.get("routing_reason", "")
+    matched_categories = state.get("matched_categories", [])
+    confidence = state.get("confidence") or "不适用（未执行分类）"
+    classification_reason = state.get("classification_reason") or "不适用（工单验证未通过，未执行分类）"
+    classification_error = state.get("classification_error")
 
     if state["ticket_status"] == "needs_manual_triage":
         status = "needs_manual_triage"
@@ -356,6 +442,9 @@ def finalize_ticket(state: TicketState) -> dict:
         f"工单状态：{status}\n"
         f"分流说明：{routing_reason}\n"
         f"匹配类别：{matched_text}\n"
+        f"置信度：{confidence}\n"
+        f"分类理由：{classification_reason}\n"
+        f"异常信息：{classification_error or '无'}\n"
     )
 
     return {
@@ -492,6 +581,232 @@ def main():
 
     graph = build_ticket_graph()
 
+    run_confidence_gate_tests()
+
+    run_confidence_routing_integration_tests(graph)
+
+    run_classification_failure_integration_tests(graph)
+
+def make_mock_llm_response(classification: dict):
+    # 辅助函数
+    """Create a mock DeepSeek response."""
+
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps(
+                        classification,
+                        ensure_ascii=False
+                    )
+                ),
+                finish_reason="stop"
+            )
+        ]
+    )
+
+def make_mock_llm_response_content(content: str):
+    """Create a mock response with raw content."""
+
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=content
+                ),
+                finish_reason="stop"
+            )
+        ]
+    )
+
+def run_confidence_routing_integration_tests(graph):
+    # 集成测试函数
+    """Test confidence gate and actual LangGraph routing."""
+
+    test_cases = [
+        {
+            "title": "Account + High",
+            "message": "我登录账号时提示密码错误",
+            "classification": {
+                "category": "Account",
+                "matched_categories": ["Account"],
+                "confidence": "High",
+                "reason": "账号问题，置信度高"
+            },
+            "expected_category": "Account",
+            "expected_queue": "Account Support",
+            "expected_status": "routed",
+            "expected_route": "assign_account_queue",
+        },
+        {
+            "title": "Account + Medium",
+            "message": "我登录账号时提示密码错误",
+            "classification": {
+                "category": "Account",
+                "matched_categories": ["Account"],
+                "confidence": "Medium",
+                "reason": "账号问题，置信度中等"
+            },
+            "expected_category": "Unknown",
+            "expected_queue": "Manual Triage",
+            "expected_status": "needs_manual_triage",
+            "expected_route": "manual_triage",
+        },
+        {
+            "title": "Account + Low",
+            "message": "我登录账号时提示密码错误",
+            "classification": {
+                "category": "Account",
+                "matched_categories": ["Account"],
+                "confidence": "Low",
+                "reason": "账号问题，置信度较低"
+            },
+            "expected_category": "Unknown",
+            "expected_queue": "Manual Triage",
+            "expected_status": "needs_manual_triage",
+            "expected_route": "manual_triage",
+        },
+        {
+            "title": "Unknown + High",
+            "message": "我想咨询企业合作事宜",
+            "classification": {
+                "category": "Unknown",
+                "matched_categories": [],
+                "confidence": "High",
+                "reason": "不属于现有业务类别"
+            },
+            "expected_category": "Unknown",
+            "expected_queue": "Manual Triage",
+            "expected_status": "needs_manual_triage",
+            "expected_route": "manual_triage",
+        },
+        {
+            "title": "Multiple + High",
+            "message": "我无法登录账号，而且订单付款后未发货",
+            "classification": {
+                "category": "Multiple",
+                "matched_categories": ["Account", "Order"],
+                "confidence": "High",
+                "reason": "同时涉及账号和订单问题"
+            },
+            "expected_category": "Multiple",
+            "expected_queue": "Manual Triage",
+            "expected_status": "needs_manual_triage",
+            "expected_route": "manual_triage",
+        },
+    ]
+
+    mock_env = {
+        "LANGGRAPH_API_KEY": "mock-api-key",
+        "LANGGRAPH_BASE_URL": "https://mock.example.com/v1",
+        "LANGGRAPH_MODEL": "mock-model",
+    }
+
+    print("\n" + "=" * 55)
+    print("置信度门控与 LangGraph 路由集成测试")
+    print("=" * 55)
+
+    passed = 0
+    failures = []
+
+    for index, case in enumerate(test_cases, start=1):
+
+        initial_state: TicketState = {
+            "ticket_id": f"MOCK-{index}",
+            "user_message": case["message"],
+
+            "is_valid": False,
+            "validation_error": "",
+
+            "category": "",
+            "priority": "",
+
+            "assigned_queue": "",
+            "routing_reason": "",
+
+            "ticket_status": "",
+            "result": "",
+
+            "processing_steps": [],
+
+            "matched_categories": [],
+            "confidence": "",
+            "classification_reason": "",
+            "classification_error": "",
+        }
+
+        mock_response = make_mock_llm_response(
+            case["classification"]
+        )
+
+        # Mock only the OpenAI client response.
+        # The real classify_ticket() and LangGraph still execute.
+        with patch.dict(os.environ, mock_env):
+            with patch(f"{__name__}.OpenAI") as mock_openai:
+
+                mock_openai.return_value.chat.completions.create.return_value = (
+                    mock_response
+                )
+
+                result = graph.invoke(initial_state)
+
+        expected_steps = [
+            "validate_ticket",
+            "classify_ticket",
+            "assess_priority",
+            case["expected_route"],
+            "finalize_ticket",
+        ]
+
+        checks = {
+            "category": (
+                result["category"] == case["expected_category"]
+            ),
+            "queue": (
+                result["assigned_queue"] == case["expected_queue"]
+            ),
+            "status": (
+                result["ticket_status"] == case["expected_status"]
+            ),
+            "execution_path": (
+                result["processing_steps"] == expected_steps
+            ),
+        }
+
+        if all(checks.values()):
+            passed += 1
+            print(f"PASS {index}: {case['title']}")
+        else:
+            failed_checks = [
+                name for name, passed_check in checks.items()
+                if not passed_check
+            ]
+
+            failures.append(case["title"])
+
+            print(f"FAIL {index}: {case['title']}")
+            print(f"失败检查项：{failed_checks}")
+
+        print(
+            f"  分类：{result['category']} | "
+            f"队列：{result['assigned_queue']} | "
+            f"状态：{result['ticket_status']}"
+        )
+
+        print(
+            "  执行节点："
+            + " -> ".join(result["processing_steps"])
+        )
+
+    print("-" * 55)
+    print(f"集成测试结果：{passed}/{len(test_cases)} 通过")
+
+    if failures:
+        print("失败测试：", failures)
+        raise AssertionError("Confidence routing integration tests failed")
+
+    print("所有置信度门控与路由集成测试通过！")
+
     run_test(
         graph,
         "TEST 1：账号问题",
@@ -533,6 +848,168 @@ def main():
     "我无法登录账号，而且订单付款后一直没有发货",
      )
 
+def run_classification_failure_integration_tests(graph):
+    """Test classification failures and safe recovery."""
+
+    test_cases = [
+        {
+            "title": "API 调用异常",
+            "failure_type": "api_error",
+            "expected_error": "ConnectionError",
+        },
+        {
+            "title": "非法 JSON 响应",
+            "failure_type": "invalid_json",
+            "expected_error": "JSONDecodeError",
+        },
+        {
+            "title": "业务校验失败",
+            "failure_type": "invalid_category",
+            "expected_error": "ValueError",
+        },
+    ]
+
+    mock_env = {
+        "LANGGRAPH_API_KEY": "mock-api-key",
+        "LANGGRAPH_BASE_URL": "https://mock.example.com/v1",
+        "LANGGRAPH_MODEL": "mock-model",
+    }
+
+    print("\n" + "=" * 55)
+    print("LLM 分类异常与安全恢复集成测试")
+    print("=" * 55)
+
+    passed = 0
+    failures = []
+
+    for index, case in enumerate(test_cases, start=1):
+
+        initial_state: TicketState = {
+            "ticket_id": f"ERROR-{index}",
+            "user_message": "我登录账号时提示密码错误",
+
+            "is_valid": False,
+            "validation_error": "",
+
+            "category": "",
+            "priority": "",
+
+            "assigned_queue": "",
+            "routing_reason": "",
+
+            "ticket_status": "",
+            "result": "",
+
+            "processing_steps": [],
+
+            "matched_categories": [],
+            "confidence": "",
+            "classification_reason": "",
+            "classification_error": "",
+        }
+
+        with patch.dict(os.environ, mock_env):
+            with patch(f"{__name__}.OpenAI") as mock_openai:
+
+                create = (
+                    mock_openai.return_value
+                    .chat.completions.create
+                )
+
+                if case["failure_type"] == "api_error":
+                    create.side_effect = ConnectionError(
+                        "Simulated API connection failure"
+                    )
+
+                elif case["failure_type"] == "invalid_json":
+                    create.return_value = (
+                        make_mock_llm_response_content(
+                            "{invalid json"
+                        )
+                    )
+
+                elif case["failure_type"] == "invalid_category":
+                    create.return_value = make_mock_llm_response({
+                        "category": "Billing",
+                        "matched_categories": [],
+                        "confidence": "High",
+                        "reason": "Simulated invalid category"
+                    })
+
+                result = graph.invoke(initial_state)
+
+        expected_steps = [
+            "validate_ticket",
+            "classify_ticket",
+            "assess_priority",
+            "manual_triage",
+            "finalize_ticket",
+        ]
+
+        checks = {
+            "category": (
+                result["category"] == "Unknown"
+            ),
+            "confidence": (
+                result["confidence"] == "Low"
+            ),
+            "error_type": (
+                result["classification_error"]
+                == case["expected_error"]
+            ),
+            "queue": (
+                result["assigned_queue"] == "Manual Triage"
+            ),
+            "status": (
+                result["ticket_status"]
+                == "needs_manual_triage"
+            ),
+            "execution_path": (
+                result["processing_steps"] == expected_steps
+            ),
+        }
+
+        if all(checks.values()):
+            passed += 1
+            print(f"PASS {index}: {case['title']}")
+        else:
+            failed_checks = [
+                name
+                for name, passed_check in checks.items()
+                if not passed_check
+            ]
+
+            failures.append(case["title"])
+
+            print(f"FAIL {index}: {case['title']}")
+            print(f"失败检查项：{failed_checks}")
+
+        print(
+            f"  分类：{result['category']} | "
+            f"置信度：{result['confidence']} | "
+            f"异常：{result['classification_error']}"
+        )
+
+        print(
+            f"  处理队列：{result['assigned_queue']} | "
+            f"状态：{result['ticket_status']}"
+        )
+
+        print(
+            "  执行节点："
+            + " -> ".join(result["processing_steps"])
+        )
+
+    print("-" * 55)
+    print(f"异常恢复测试结果：{passed}/{len(test_cases)} 通过")
+
+    if failures:
+        print("失败测试：", failures)
+        raise AssertionError(
+            "Classification failure recovery tests failed"
+        )
+
+    print("所有异常恢复测试通过！")
 
 if __name__ == "__main__":
     main()
